@@ -5,7 +5,7 @@ from collections import defaultdict
 import io
 
 # ===================== ULTRA PROFESSIONAL UI =====================
-st.set_page_config(page_title="iPa Result Analyzer v6.6", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="iPa Result Analyzer v6.7", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -20,35 +20,39 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("## 🧠 iPa Analyzer v6.6")
+st.sidebar.markdown("## 🧠 iPa Analyzer v6.7")
 st.sidebar.markdown("---")
-st.sidebar.markdown("**UGC Exact Rules**")
-st.sidebar.markdown("- Grade mapping fixed (A+ starts at 7.5)")
-st.sidebar.markdown("- Tie-breaker: Alphabetical (A-Z)")
+st.sidebar.markdown("**Credit-Based SGPA (26 Credits)**")
+st.sidebar.markdown("- Subjects 1-7: out of 100")
+st.sidebar.markdown("- LS & EA: out of 50")
 
 uploaded_file = st.file_uploader(
     "Upload Document (TXT, PDF, Image, CSV)",
     type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== EXACT UGC PARSER ========================
+# ======================== CREDIT-BASED PARSER ========================
 
 def parse_mba_odl(text):
     lines = text.split('\n')
     data = []
+    
+    # Credit structure (as per MANUU MBA ODL)
+    credits = [3, 3, 3, 3, 3, 3, 4, 2, 2]
+    total_credits = sum(credits)  # 26
     
     for line in lines:
         parts = line.split()
         if len(parts) < 20:
             continue
             
-        # 1. FIND RESULT (PASSED / FAILED)
+        # 1. FIND RESULT
         try:
             res_idx = parts.index('PASSED') if 'PASSED' in parts else parts.index('FAILED')
         except ValueError:
             continue
         
-        # 2. FIND SUBJECT START (First numeric token or 'Ab' after index 3)
+        # 2. FIND SUBJECT START
         sub_start = -1
         for i in range(4, res_idx):
             token = parts[i]
@@ -59,65 +63,115 @@ def parse_mba_odl(text):
         if sub_start == -1:
             continue
         
-        # 3. EXTRACT BASIC INFO
+        # 3. BASIC INFO
         sl = parts[0]
         rc = parts[1]
         enrl = parts[2]
         roll = parts[3]
         
-        # 4. EXTRACT STUDENT NAME
+        # 4. NAME
         name_tokens = parts[4:sub_start]
         name = ' '.join(name_tokens)
         
-        # 5. EXTRACT SUBJECT TOKENS (Exactly 25 tokens for 9 subjects)
+        # 5. SUBJECT TOKENS (Exactly 25 tokens)
         subject_tokens = parts[sub_start:res_idx]
         if len(subject_tokens) < 25:
             continue
         
-        total = 0
-        
-        # Subjects 1 to 7 (Each has A, T, R)
+        # 6. EXTRACT RAW MARKS
+        # Subjects 1 to 7 (A, T, R)
+        a_vals = []
+        t_vals = []
+        r_vals = []
         for i in range(7):
             a_str = subject_tokens[i*3]
             t_str = subject_tokens[i*3 + 1]
+            r_str = subject_tokens[i*3 + 2]
             a = float(re.sub(r'[^0-9.]', '', a_str)) if a_str.replace('.','',1).isdigit() or a_str.isdigit() else 0
             t = float(re.sub(r'[^0-9.]', '', t_str)) if t_str.replace('.','',1).isdigit() or t_str.isdigit() else 0
-            total += a + t
+            a_vals.append(a)
+            t_vals.append(t)
+            r_vals.append(r_str)
         
         # Subject 8 (P8, R8)
-        p8_str = subject_tokens[21]
-        p8 = float(re.sub(r'[^0-9.]', '', p8_str)) if p8_str.replace('.','',1).isdigit() or p8_str.isdigit() else 0
-        total += p8
+        p8 = float(re.sub(r'[^0-9.]', '', subject_tokens[21])) if subject_tokens[21].replace('.','',1).isdigit() or subject_tokens[21].isdigit() else 0
+        r8 = subject_tokens[22]
         
         # Subject 9 (P9, R9)
-        p9_str = subject_tokens[23]
-        p9 = float(re.sub(r'[^0-9.]', '', p9_str)) if p9_str.replace('.','',1).isdigit() or p9_str.isdigit() else 0
-        total += p9
+        p9 = float(re.sub(r'[^0-9.]', '', subject_tokens[23])) if subject_tokens[23].replace('.','',1).isdigit() or subject_tokens[23].isdigit() else 0
+        r9 = subject_tokens[24]
         
-        # 6. CHECK FAILURE
-        result = parts[res_idx]
+        # 7. CHECK FAILURE
         is_fail = False
-        for i in range(7):
-            r_token = subject_tokens[i*3 + 2]
-            if 'F' in r_token or 'Ab' in r_token:
+        for r in r_vals:
+            if 'F' in r or 'Ab' in r:
                 is_fail = True
                 break
-        if 'F' in subject_tokens[22] or 'F' in subject_tokens[24] or 'Ab' in subject_tokens[22] or 'Ab' in subject_tokens[24]:
+        if 'F' in r8 or 'F' in r9 or 'Ab' in r8 or 'Ab' in r9:
             is_fail = True
         
-        final_result = 'PASSED' if (result == 'PASSED' and not is_fail) else 'FAILED'
+        final_result = 'PASSED' if (parts[res_idx] == 'PASSED' and not is_fail) else 'FAILED'
         
-        # 7. CALCULATE SGPA (DIVISOR = 718)
-        sgpa = round((total / 718) * 10, 2) if total > 0 else 0.0
+        # 8. CALCULATE GRADE POINTS & WEIGHTED SUM (CREDIT BASED)
+        weighted_sum = 0
+        raw_total = 0
+        subject_details = []
         
-        # 8. 🔥 EXACT GRADE MAPPING (As per your table)
+        # Subjects 1 to 7 (Out of 100)
+        for i in range(7):
+            marks = a_vals[i] + t_vals[i]
+            raw_total += marks
+            pct = marks  # Already out of 100
+            
+            # Grade Point Mapping
+            if pct >= 90: gp = 10
+            elif pct >= 75: gp = 9
+            elif pct >= 60: gp = 8
+            elif pct >= 55: gp = 7
+            elif pct >= 50: gp = 6
+            elif pct >= 45: gp = 5
+            elif pct >= 40: gp = 4
+            else: gp = 0
+            
+            weighted_sum += gp * credits[i]
+        
+        # Subject 8 (LS) (Out of 50)
+        raw_total += p8
+        pct_ls = (p8 / 50) * 100
+        if pct_ls >= 90: gp_ls = 10
+        elif pct_ls >= 75: gp_ls = 9
+        elif pct_ls >= 60: gp_ls = 8
+        elif pct_ls >= 55: gp_ls = 7
+        elif pct_ls >= 50: gp_ls = 6
+        elif pct_ls >= 45: gp_ls = 5
+        elif pct_ls >= 40: gp_ls = 4
+        else: gp_ls = 0
+        weighted_sum += gp_ls * credits[7]
+        
+        # Subject 9 (EA) (Out of 50)
+        raw_total += p9
+        pct_ea = (p9 / 50) * 100
+        if pct_ea >= 90: gp_ea = 10
+        elif pct_ea >= 75: gp_ea = 9
+        elif pct_ea >= 60: gp_ea = 8
+        elif pct_ea >= 55: gp_ea = 7
+        elif pct_ea >= 50: gp_ea = 6
+        elif pct_ea >= 45: gp_ea = 5
+        elif pct_ea >= 40: gp_ea = 4
+        else: gp_ea = 0
+        weighted_sum += gp_ea * credits[8]
+        
+        # SGPA = Weighted Sum / Total Credits (26)
+        sgpa = round(weighted_sum / total_credits, 2)
+        
+        # 9. GRADE AS PER SGPA RANGE (Exact as image)
         if sgpa >= 9.0: grade = 'O'
-        elif sgpa >= 7.5: grade = 'A+'   # <-- Fixed! 75% to 89.99%
+        elif sgpa >= 7.5: grade = 'A+'
         elif sgpa >= 6.0: grade = 'A'
         elif sgpa >= 5.5: grade = 'B+'
         elif sgpa >= 5.0: grade = 'B'
         elif sgpa >= 4.5: grade = 'C'
-        elif sgpa >= 4.0: grade = 'P'
+        elif sgpa >= 4.0: grade = 'D'
         else: grade = 'F'
         
         data.append({
@@ -126,7 +180,7 @@ def parse_mba_odl(text):
             "Enrl No": enrl,
             "Roll No": roll,
             "Student Name": name,
-            "Total": int(total),
+            "Total": int(raw_total),
             "SGPA": sgpa,
             "Grade": grade,
             "Result": final_result
@@ -137,8 +191,7 @@ def parse_mba_odl(text):
     
     df = pd.DataFrame(data)
     
-    # 9. 🔥 TIE-BREAKER (Exact UGC Rule)
-    # Sort by SGPA Desc, Total Desc, then Student Name Ascending (A-Z)
+    # --- TIE-BREAKER (Exact UGC Rule) ---
     df = df.sort_values(by=['SGPA', 'Total', 'Student Name'], ascending=[False, False, True])
     df['Rank'] = range(1, len(df) + 1)
     df = df[['Rank', 'SL', 'Student Name', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
@@ -150,7 +203,7 @@ if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
     df_result = pd.DataFrame()
     
-    with st.spinner("🔄 iPa v6.6 analyzing with Exact UGC rules..."):
+    with st.spinner("🔄 iPa v6.7 calculating credit-based SGPA..."):
         try:
             if file_name.endswith('.txt'):
                 content = uploaded_file.read().decode('utf-8')
@@ -197,7 +250,7 @@ if uploaded_file is not None:
                     df_result = parse_mba_odl(text)
                     st.success("✅ OCR/PDF Data Parsed Successfully!")
                 else:
-                    st.error("❌ No text extracted from the document.")
+                    st.error("❌ No text extracted.")
                     st.stop()
             else:
                 st.error("❌ Unsupported format")
@@ -205,7 +258,7 @@ if uploaded_file is not None:
 
             # ---- DISPLAY RESULTS ----
             if not df_result.empty:
-                st.subheader("📊 Final Ranked Result (UGC Rules)")
+                st.subheader("📊 Final Ranked Result (Credit-Based UGC Rule)")
                 
                 total_students = len(df_result)
                 avg_sgpa = df_result['SGPA'].mean()
@@ -220,7 +273,7 @@ if uploaded_file is not None:
                 
                 st.markdown("---")
                 
-                # Top 3 Toppers (With Names & Correct Grade!)
+                # Top 3 Toppers
                 st.subheader("🏆 Top 3 Toppers")
                 top3 = df_result.head(3)
                 for idx, row in top3.iterrows():
@@ -245,4 +298,4 @@ else:
     st.info("👆 Upload your MBA ODL Result data.")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.6 | Exact UGC Grades & Tie-Breaker</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.7 | Credit-Based SGPA (26 Credits)</p>", unsafe_allow_html=True)
