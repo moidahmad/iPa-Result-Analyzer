@@ -4,20 +4,12 @@ import pandas as pd
 import io
 from collections import defaultdict
 from fpdf import FPDF
-import base64
+import random
 
-# ===================== ULTRA PROFESSIONAL UI =====================
-st.set_page_config(page_title="iPa Result Analyzer v6.8", layout="wide", initial_sidebar_state="expanded")
+# ===================== PAGE CONFIG =====================
+st.set_page_config(page_title="iPa Result Analyzer v6.9", layout="wide", initial_sidebar_state="expanded")
 
-# Islamic Quotes for Sidebar
-ISLAMIC_QUOTES = [
-    "🤲 *Rabbi zidni ilma* (My Lord, increase me in knowledge)",
-    "📖 *Indeed, with hardship comes ease* (Surah Ash-Sharh 94:6)",
-    "🌟 *The best of you are those who learn the Quran and teach it* (Bukhari)",
-    "💡 *Seeking knowledge is an obligation upon every Muslim* (Ibn Majah)",
-    "🌙 *And say, 'My Lord, increase me in knowledge'* (Surah Taha 20:114)"
-]
-
+# ===================== CUSTOM CSS (PROFESSIONAL LOOK) =====================
 st.markdown("""
 <style>
     .stApp { background-color: #f1f5f9; }
@@ -31,27 +23,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar - Islamic Quote
-st.sidebar.markdown("## 🧠 iPa Analyzer v6.8")
+# ===================== SIDEBAR =====================
+st.sidebar.markdown("## 🧠 iPa Analyzer v6.9")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📦 Features:**")
-st.sidebar.markdown("- UGC Credit-Based SGPA")
+st.sidebar.markdown("- UGC Credit-Based SGPA (26 Credits)")
 st.sidebar.markdown("- Export Excel & PDF")
 st.sidebar.markdown("- Tie-Breaker + Name Fix")
-
-import random
-st.sidebar.markdown("---")
-st.sidebar.markdown(random.choice(ISLAMIC_QUOTES))
+st.sidebar.markdown("- Enrollment No. Column Added")
 st.sidebar.markdown("---")
 st.sidebar.caption("Built with ❤️ for Moid | Deen + Dunya")
 
+# ===================== FILE UPLOADER =====================
 uploaded_file = st.file_uploader(
-    "Upload Document (TXT, PDF, Image, CSV)",
+    "Upload Document (TXT, PDF, Image, CSV, Excel)",
     type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== FIXED PARSER (Roll + Name Split) ========================
-
+# ======================== CORE PARSER (FIXED) ========================
 def parse_mba_odl(text):
     lines = text.split('\n')
     data = []
@@ -64,11 +53,13 @@ def parse_mba_odl(text):
         if len(parts) < 20:
             continue
             
+        # Find result
         try:
             res_idx = parts.index('PASSED') if 'PASSED' in parts else parts.index('FAILED')
         except ValueError:
             continue
         
+        # Find subject start
         sub_start = -1
         for i in range(4, res_idx):
             token = parts[i]
@@ -79,41 +70,34 @@ def parse_mba_odl(text):
         if sub_start == -1:
             continue
         
-        # --- FIX: Roll No and Name Separation ---
+        # --- BASIC INFO ---
         sl = parts[0]
         rc = parts[1]
-        enrl = parts[2]
+        enrl_no = parts[2]  # 🔥 Enrollment No
         
-        # Raw token (may contain glued Name)
+        # --- ROLL NO + NAME (FIXED: 11-char Roll No pattern) ---
         raw_roll = parts[3]
-        
-        # Regex to find the exact Roll Number pattern (25MBAQxxxYY)
-        roll_match = re.match(r'(25MBAQ\d{3}[A-Z]+)(.*)', raw_roll)
+        roll_match = re.match(r'^(25MBAQ\d{3}[A-Z]{2})(.*)', raw_roll)
         
         if roll_match:
-            roll = roll_match.group(1)       # e.g., 25MBAQ005MU
-            name_extra = roll_match.group(2).strip()  # e.g., SHAIKHMDJAVED...
+            roll = roll_match.group(1)
+            name_extra = roll_match.group(2).strip()
         else:
             roll = raw_roll
             name_extra = ""
         
-        # Collect name tokens from standard position
+        # Name tokens (if not glued)
         name_tokens = parts[4:sub_start]
-        
-        # Combine: If name_extra exists (glued case), it is the actual name.
-        # If not, name_tokens are the actual name.
         if name_extra:
-            # If glued, sub_start might have shifted. Let's ensure we don't lose name.
-            # Actually, if glued, parts[4] onwards are subjects, so name_tokens is empty.
             full_name = name_extra
         else:
             full_name = ' '.join(name_tokens)
         
-        # If full_name is still empty (edge case), fallback to raw roll (shouldn't happen)
+        # Fallback
         if not full_name:
-            full_name = raw_roll
+            full_name = roll
         
-        # --- Subject Extraction (Same as v6.7) ---
+        # --- SUBJECT EXTRACTION (Credit-Based) ---
         subject_tokens = parts[sub_start:res_idx]
         if len(subject_tokens) < 25:
             continue
@@ -121,12 +105,10 @@ def parse_mba_odl(text):
         weighted_sum = 0
         raw_total = 0
         
-        # Subjects 1-7
+        # Subjects 1-7 (out of 100)
         for i in range(7):
             a_str = subject_tokens[i*3]
             t_str = subject_tokens[i*3 + 1]
-            r_str = subject_tokens[i*3 + 2]
-            
             a = float(re.sub(r'[^0-9.]', '', a_str)) if a_str.replace('.','',1).isdigit() or a_str.isdigit() else 0
             t = float(re.sub(r'[^0-9.]', '', t_str)) if t_str.replace('.','',1).isdigit() or t_str.isdigit() else 0
             marks = a + t
@@ -140,10 +122,9 @@ def parse_mba_odl(text):
             elif marks >= 45: gp = 5
             elif marks >= 40: gp = 4
             else: gp = 0
-            
             weighted_sum += gp * credits[i]
         
-        # Subject 8 (LS)
+        # Subject 8 (LS) - out of 50
         p8 = float(re.sub(r'[^0-9.]', '', subject_tokens[21])) if subject_tokens[21].replace('.','',1).isdigit() or subject_tokens[21].isdigit() else 0
         raw_total += p8
         pct_ls = (p8 / 50) * 100
@@ -157,7 +138,7 @@ def parse_mba_odl(text):
         else: gp_ls = 0
         weighted_sum += gp_ls * credits[7]
         
-        # Subject 9 (EA)
+        # Subject 9 (EA) - out of 50
         p9 = float(re.sub(r'[^0-9.]', '', subject_tokens[23])) if subject_tokens[23].replace('.','',1).isdigit() or subject_tokens[23].isdigit() else 0
         raw_total += p9
         pct_ea = (p9 / 50) * 100
@@ -188,7 +169,7 @@ def parse_mba_odl(text):
         data.append({
             "SL": sl,
             "RC/SRC": rc,
-            "Enrl No": enrl,
+            "Enrollment No": enrl_no,
             "Roll No": roll,
             "Student Name": full_name,
             "Total": int(raw_total),
@@ -203,47 +184,45 @@ def parse_mba_odl(text):
     df = pd.DataFrame(data)
     df = df.sort_values(by=['SGPA', 'Total', 'Student Name'], ascending=[False, False, True])
     df['Rank'] = range(1, len(df) + 1)
-    df = df[['Rank', 'SL', 'Student Name', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
+    df = df[['Rank', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
     return df
 
-# ======================== PDF GENERATION (Islamic Touch) ========================
-
+# ======================== PDF GENERATOR (NO ISLAMIC VIBE - PLAIN) ========================
 def generate_pdf(df):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    # Header: Bismillah
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(200, 10, txt="Bismillahir Rahmanir Rahim", ln=True, align='C')
-    pdf.set_font("Arial", 'B', 12)
+    # Title
+    pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="MBA ODL Result Analysis (UGC Credit Rules)", ln=True, align='C')
-    pdf.ln(10)
+    pdf.ln(8)
     
     # Table Header
     pdf.set_font("Arial", 'B', 8)
-    headers = ['Rank', 'Student Name', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
-    col_widths = [15, 60, 30, 20, 20, 15, 20]
+    headers = ['Rank', 'Student Name', 'Enrollment', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
+    col_widths = [12, 50, 22, 25, 15, 15, 12, 18]
     for i, h in enumerate(headers):
         pdf.cell(col_widths[i], 10, h, border=1, align='C')
     pdf.ln()
     
     # Table Data
     pdf.set_font("Arial", '', 7)
-    for index, row in df.iterrows():
+    for _, row in df.iterrows():
         pdf.cell(col_widths[0], 8, str(row['Rank']), border=1, align='C')
-        pdf.cell(col_widths[1], 8, str(row['Student Name'])[:25], border=1, align='L')
-        pdf.cell(col_widths[2], 8, str(row['Roll No']), border=1, align='C')
-        pdf.cell(col_widths[3], 8, str(row['Total']), border=1, align='C')
-        pdf.cell(col_widths[4], 8, f"{row['SGPA']:.2f}", border=1, align='C')
-        pdf.cell(col_widths[5], 8, str(row['Grade']), border=1, align='C')
-        pdf.cell(col_widths[6], 8, str(row['Result']), border=1, align='C')
+        pdf.cell(col_widths[1], 8, str(row['Student Name'])[:22], border=1, align='L')
+        pdf.cell(col_widths[2], 8, str(row['Enrollment No']), border=1, align='C')
+        pdf.cell(col_widths[3], 8, str(row['Roll No']), border=1, align='C')
+        pdf.cell(col_widths[4], 8, str(row['Total']), border=1, align='C')
+        pdf.cell(col_widths[5], 8, f"{row['SGPA']:.2f}", border=1, align='C')
+        pdf.cell(col_widths[6], 8, str(row['Grade']), border=1, align='C')
+        pdf.cell(col_widths[7], 8, str(row['Result']), border=1, align='C')
         pdf.ln()
     
     # Footer
-    pdf.ln(10)
-    pdf.set_font("Arial", 'I', 10)
-    pdf.cell(200, 10, txt="Jazakallah Khair | Built for Moid | iPa v6.8", ln=True, align='C')
+    pdf.ln(6)
+    pdf.set_font("Arial", 'I', 9)
+    pdf.cell(200, 10, txt="Generated by iPa v6.9 | For Moid", ln=True, align='C')
     
     return pdf.output(dest='S').encode('latin1')
 
@@ -253,13 +232,14 @@ if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
     df_result = pd.DataFrame()
     
-    with st.spinner("🔄 iPa v6.8 analyzing with Export magic..."):
+    with st.spinner("🔄 iPa v6.9 analyzing..."):
         try:
-            # (READING LOGIC - Same as v6.7, omitted for brevity but kept in actual code)
+            # --- READING LOGIC ---
             if file_name.endswith('.txt'):
                 content = uploaded_file.read().decode('utf-8')
                 df_result = parse_mba_odl(content)
                 st.success("✅ Raw Text Data Parsed Successfully!")
+            
             elif file_name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file)
                 if len(df.columns) > 15:
@@ -268,11 +248,19 @@ if uploaded_file is not None:
                     df_result = parse_mba_odl(txt_buffer.getvalue())
                 else:
                     df_result = df
+                    st.info("📊 CSV uploaded. Displaying as is.")
+            
             elif file_name.endswith('.xlsx'):
                 import openpyxl
                 df = pd.read_excel(uploaded_file)
-                st.warning("⚠️ Excel uploaded. Please upload raw .txt file for best results.")
-                df_result = df
+                if len(df.columns) > 15:
+                    txt_buffer = io.StringIO()
+                    df.to_csv(txt_buffer, index=False, header=False)
+                    df_result = parse_mba_odl(txt_buffer.getvalue())
+                else:
+                    df_result = df
+                    st.info("📊 Excel uploaded. Displaying as is.")
+            
             elif file_name.endswith(('pdf', 'png', 'jpg', 'jpeg')):
                 text = ""
                 if file_name.endswith('.pdf'):
@@ -293,6 +281,7 @@ if uploaded_file is not None:
                     except ImportError:
                         st.error("❌ pytesseract not installed.")
                         st.stop()
+                
                 if text:
                     df_result = parse_mba_odl(text)
                     st.success("✅ OCR/PDF Data Parsed Successfully!")
@@ -303,7 +292,7 @@ if uploaded_file is not None:
                 st.error("❌ Unsupported format")
                 st.stop()
 
-            # ---- DISPLAY RESULTS ----
+            # --- DISPLAY RESULTS ---
             if not df_result.empty:
                 total_students = len(df_result)
                 avg_sgpa = df_result['SGPA'].mean()
@@ -318,26 +307,27 @@ if uploaded_file is not None:
                 
                 st.markdown("---")
                 
+                # Top 3
                 st.subheader("🏆 Top 3 Toppers")
                 top3 = df_result.head(3)
-                for idx, row in top3.iterrows():
+                for _, row in top3.iterrows():
                     st.markdown(f"**Rank {row['Rank']}:** {row['Student Name']} | SGPA: {row['SGPA']} | Total: {row['Total']} | Grade: {row['Grade']}")
                 
                 st.markdown("---")
                 
-                # Full Data Table
+                # Full Table
                 st.subheader("📋 Complete Ranked List")
                 display_df = df_result.copy()
                 display_df.index = range(1, len(display_df) + 1)
                 st.dataframe(display_df.style.hide(axis='index'), use_container_width=True, height=500)
                 
-                # ---- EXPORT SECTION (Excel & PDF) ----
+                # --- EXPORT SECTION ---
                 st.markdown("---")
                 st.subheader("📤 Export Your Report")
                 
                 col1, col2 = st.columns(2)
                 
-                # 1. Export to Excel
+                # Excel
                 with col1:
                     towrite = io.BytesIO()
                     with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
@@ -350,7 +340,7 @@ if uploaded_file is not None:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 
-                # 2. Export to PDF
+                # PDF
                 with col2:
                     try:
                         pdf_bytes = generate_pdf(df_result)
@@ -371,7 +361,7 @@ if uploaded_file is not None:
             st.info("💡 If you have raw text, paste it into a .txt file and upload.")
 
 else:
-    st.info("👆 Upload your MBA ODL Result data.")
+    st.info("👆 Upload your MBA ODL Result data (TXT, PDF, Image, CSV, Excel).")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.8 | Export Enabled | Islamic Vibe</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.9 | Enrollment No Added | Export Enabled</p>", unsafe_allow_html=True)
