@@ -23,15 +23,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ===================== SIDEBAR =====================
 st.sidebar.markdown("## 🧠 iPa Analyzer v7.1")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📦 Features:**")
 st.sidebar.markdown("- UGC Credit-Based SGPA (26 Credits)")
 st.sidebar.markdown("- Export Excel & PDF")
-st.sidebar.markdown("- Tie-Breaker + Name Fix")
+st.sidebar.markdown("- Tie-Breaker + Name Space Injector")
 st.sidebar.markdown("- Enrollment No. Column Added")
-st.sidebar.markdown("- Sr. No. Column Fixed")
 st.sidebar.markdown("---")
 st.sidebar.caption("Built with ❤️ for Moid | Deen + Dunya")
 
@@ -40,25 +38,51 @@ uploaded_file = st.file_uploader(
     type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== ULTIMATE SPACE INJECTOR (FIX 2) ========================
-def ultimate_space_injector(name):
-    """Insert spaces between capital letters. E.g., MoidAhmad -> Moid Ahmad"""
-    if ' ' in name:
+# ======================== SUPER SMART SPACE INJECTOR ========================
+def clean_glued_name(name):
+    """Insert spaces into glued names (works for all patterns)"""
+    if not name:
         return name
     
-    # Insert space before every capital letter that follows a lowercase letter
-    # e.g., "MoidAhmad" -> "Moid Ahmad"
-    name_with_spaces = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+    # Remove extra spaces
+    name = name.strip()
     
-    # Also handle cases like "MDJAVED" -> "MD JAVED"
-    # Insert space between known tokens (like MD, SHAIKH, etc.)
-    tokens = ['MOHAMMED', 'MOHD', 'ABDUL', 'SHAIKH', 'SYED', 'HASAN', 'HUSAIN', 'AHMAD', 'KHAN', 'MD', 'BIN', 'ALI']
-    for token in tokens:
-        name_with_spaces = name_with_spaces.replace(token, f' {token}')
+    # If already has a space, just trim and return
+    if ' ' in name:
+        return ' '.join(name.split())
+    
+    # Comprehensive list of name tokens found in the PDF (sorted by length descending to avoid partial matches)
+    tokens = [
+        'MOHAMMED', 'MOHD', 'ABDUL', 'SHAIKH', 'SYED', 'QUTUBUDDIN', 'SHAIK', 
+        'MD', 'BIN', 'KHAN', 'HASAN', 'HUSAIN', 'AHMAD', 'ALI', 'JAVED', 
+        'NAEEM', 'NAGMA', 'SHAFI', 'ASRAR', 'MEER', 'YOUSUF', 'HAROON', 
+        'RAHMAN', 'WAHAB', 'FARID', 'ABBAS', 'SALMAN', 'RASHEED', 'AKHTAR', 
+        'ANJUM', 'SABIR', 'DANISH', 'JUNAID', 'SIMRAN', 'KAUSAR', 'ABUZAR', 
+        'MAQDOOM', 'IFTIKHAR', 'ZAMEER', 'ALAM', 'TABBASUM', 'PERVEEN', 
+        'RAZA', 'HUSSAIN', 'NOMAN', 'ARIF', 'FAIZ', 'MEHAR', 'NISAR', 
+        'SHAMS', 'AFTAB', 'SAFWAN', 'TAUQEER', 'SAQIB', 'BANO', 'MUGERA', 
+        'ADNAN', 'KAMAL', 'AHMED', 'ASIF', 'ANWER', 'SIDDIQUI', 'FARAZ',
+        'KASHIF', 'NASEEM', 'RIZWAN', 'EHTASHAM', 'ISHFAQ', 'MAQBOOL', 
+        'NAYYAR', 'SOHAIL', 'TANVEER', 'ZAHID', 'SHAHID', 'SHAKIR', 'MOID'
+    ]
+    
+    # Sort by length descending to match longer tokens first (e.g., MOHAMMED before MD)
+    tokens_sorted = sorted(tokens, key=len, reverse=True)
+    
+    # Build a regex pattern
+    pattern = '|'.join(re.escape(token) for token in tokens_sorted)
+    
+    # Insert spaces before matched tokens
+    result = re.sub(r'(?<![A-Z])(' + pattern + r')', r' \1', name)
     
     # Clean up extra spaces
-    name_with_spaces = ' '.join(name_with_spaces.split())
-    return name_with_spaces
+    result = ' '.join(result.split())
+    
+    # If result is still the same (no tokens found), return original
+    if result == name:
+        return name
+    
+    return result
 
 # ======================== CORE PARSER ========================
 def parse_mba_odl(text):
@@ -110,9 +134,8 @@ def parse_mba_odl(text):
         else:
             full_name = ' '.join(name_tokens)
         
-        # --- APPLY ULTIMATE SPACE INJECTOR ---
-        full_name = ultimate_space_injector(full_name)
-        
+        # --- APPLY SPACE INJECTOR ---
+        full_name = clean_glued_name(full_name)
         if not full_name:
             full_name = roll
         
@@ -201,21 +224,12 @@ def parse_mba_odl(text):
         return pd.DataFrame()
     
     df = pd.DataFrame(data)
+    # --- SORT & RANK (Tie-breaker) ---
     df = df.sort_values(by=['SGPA', 'Total', 'Student Name'], ascending=[False, False, True])
+    df['Rank'] = range(1, len(df) + 1)  # Rank column (1,2,3...)
     
-    # 🔥 FIX: Rank column as original, and add Sr. No. before it
-    df['Rank'] = range(1, len(df) + 1)
-    # Move Sr. No. to the front
-    cols = df.columns.tolist()
-    # Remove 'Rank' from its current position and insert at start
-    cols.remove('Rank')
-    cols.insert(0, 'Sr. No.')  # This will be the index column (0,1,2,...)
-    cols.insert(1, 'Rank')     # Rank comes right after Sr. No.
-    # But we want the actual index to be Sr. No., not Rank.
-    # So we'll set index to Sr. No. and keep Rank as a column
-    df['Sr. No.'] = range(1, len(df) + 1)
-    df = df[['Sr. No.', 'Rank', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
-    
+    # Final columns: Rank first, then others
+    df = df[['Rank', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
     return df
 
 # ======================== PDF GENERATOR ========================
@@ -229,23 +243,22 @@ def generate_pdf(df):
     pdf.ln(8)
     
     pdf.set_font("Arial", 'B', 8)
-    headers = ['Sr. No.', 'Rank', 'Student Name', 'Enrollment', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
-    col_widths = [10, 10, 42, 18, 20, 15, 15, 12, 18]
+    headers = ['Rank', 'Student Name', 'Enrollment', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
+    col_widths = [12, 50, 22, 25, 15, 15, 12, 18]
     for i, h in enumerate(headers):
         pdf.cell(col_widths[i], 10, h, border=1, align='C')
     pdf.ln()
     
     pdf.set_font("Arial", '', 7)
     for _, row in df.iterrows():
-        pdf.cell(col_widths[0], 8, str(row['Sr. No.']), border=1, align='C')
-        pdf.cell(col_widths[1], 8, str(row['Rank']), border=1, align='C')
-        pdf.cell(col_widths[2], 8, str(row['Student Name'])[:20], border=1, align='L')
-        pdf.cell(col_widths[3], 8, str(row['Enrollment No']), border=1, align='C')
-        pdf.cell(col_widths[4], 8, str(row['Roll No']), border=1, align='C')
-        pdf.cell(col_widths[5], 8, str(row['Total']), border=1, align='C')
-        pdf.cell(col_widths[6], 8, f"{row['SGPA']:.2f}", border=1, align='C')
-        pdf.cell(col_widths[7], 8, str(row['Grade']), border=1, align='C')
-        pdf.cell(col_widths[8], 8, str(row['Result']), border=1, align='C')
+        pdf.cell(col_widths[0], 8, str(row['Rank']), border=1, align='C')
+        pdf.cell(col_widths[1], 8, str(row['Student Name'])[:22], border=1, align='L')
+        pdf.cell(col_widths[2], 8, str(row['Enrollment No']), border=1, align='C')
+        pdf.cell(col_widths[3], 8, str(row['Roll No']), border=1, align='C')
+        pdf.cell(col_widths[4], 8, str(row['Total']), border=1, align='C')
+        pdf.cell(col_widths[5], 8, f"{row['SGPA']:.2f}", border=1, align='C')
+        pdf.cell(col_widths[6], 8, str(row['Grade']), border=1, align='C')
+        pdf.cell(col_widths[7], 8, str(row['Result']), border=1, align='C')
         pdf.ln()
     
     pdf.ln(6)
@@ -319,7 +332,6 @@ if uploaded_file is not None:
                 st.error("❌ Unsupported format")
                 st.stop()
 
-            # --- DISPLAY RESULTS ---
             if not df_result.empty:
                 total_students = len(df_result)
                 avg_sgpa = df_result['SGPA'].mean()
@@ -344,9 +356,9 @@ if uploaded_file is not None:
                 st.subheader("📋 Complete Ranked List")
                 display_df = df_result.copy()
                 display_df.index = range(1, len(display_df) + 1)
+                # 🔥 HIDE THE EMPTY INDEX COLUMN (Rank is already the first data column)
                 st.dataframe(display_df.style.hide(axis='index'), use_container_width=True, height=500)
                 
-                # --- EXPORT SECTION ---
                 st.markdown("---")
                 st.subheader("📤 Export Your Report")
                 
@@ -374,7 +386,7 @@ if uploaded_file is not None:
                             mime="application/pdf"
                         )
                     except Exception as e:
-                        st.error(f"PDF Generation Error: {e}. Please install fpdf: pip install fpdf")
+                        st.error(f"PDF Error: {e}. pip install fpdf")
                 
             else:
                 st.warning("⚠️ No valid data found.")
@@ -384,7 +396,7 @@ if uploaded_file is not None:
             st.info("💡 If you have raw text, paste it into a .txt file and upload.")
 
 else:
-    st.info("👆 Upload your MBA ODL Result data (TXT, PDF, Image, CSV, Excel).")
+    st.info("👆 Upload your MBA ODL Result data.")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.1 | Real Sr. No. + Ultimate Space Injector</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.1 | Rank Only | Space Injector</p>", unsafe_allow_html=True)
