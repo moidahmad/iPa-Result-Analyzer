@@ -7,7 +7,7 @@ from collections import defaultdict
 from PIL import Image
 
 # ===================== ULTRA PROFESSIONAL UI =====================
-st.set_page_config(page_title="iPa Result Analyzer v6.2", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="iPa Result Analyzer v6.3", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -22,10 +22,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("## 🧠 iPa Analyzer v6.2")
+st.sidebar.markdown("## 🧠 iPa Analyzer v6.3")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Supports:** CSV | Excel | PDF | Images")
-st.sidebar.markdown("**Fix:** Serial Numbers 1 se start, Toppers chhota, Table sahi")
+st.sidebar.markdown("**Fixes:** Blue Index hidden, Stats explained, PDF SPI/CPI extracted")
 
 uploaded_file = st.file_uploader(
     "Upload Document",
@@ -59,13 +59,13 @@ def normalize_rows(rows, target_cols):
         norm_rows.append(row)
     return norm_rows
 
-def smart_parse_v62(headers, rows):
+def smart_parse_v63(headers, rows):
     try:
         headers_lower = [str(h).lower().strip() for h in headers]
         
-        # --- 0. WIDE MBA TRANSCRIPT (SPI/CPI hidden in data) ---
+        # --- 0. WIDE MBA TRANSCRIPT (SPI/CPI hidden in data) ----
         if (any('student' in h or 'roll' in h for h in headers_lower) and len(headers) > 10):
-            st.info("📄 **Wide MBA Transcript** detected! Extracting SPI/CPI from row ends.")
+            st.info("📄 **Wide MBA Transcript** detected! iPa is scanning the last 5 columns for SPI/CPI.")
             name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'roll' in h or 'name' in h), None)
             
             spis, cpis, results, names = [], [], [], []
@@ -73,14 +73,25 @@ def smart_parse_v62(headers, rows):
                 if name_idx is not None and len(row) > name_idx:
                     names.append(str(row[name_idx]).strip())
                 
-                row_str = ' '.join(map(str, row))
+                # 🔥 SMART TRICK: Row ke last 15 columns ko check karo (kyunki SPI/CPI bilkul end mein hote hain)
+                row_len = len(row)
+                if row_len > 15:
+                    # Slicing karo (last 15 items)
+                    last_items = row[row_len-15:row_len]
+                    row_str = ' '.join(map(str, last_items))
+                else:
+                    row_str = ' '.join(map(str, row))
+                
+                # 🔥 Ab is chhote se part mein decimal numbers dhoondho (e.g., 8.96, 7.28)
                 nums = re.findall(r'\b(\d+\.\d+)\b', row_str)
                 dec_nums = [float(n) for n in nums if 0 <= float(n) <= 10]
                 
                 if len(dec_nums) >= 2:
+                    # Maan lo ki last 2 decimals SPI aur CPI hain
                     spis.append(dec_nums[-2])
                     cpis.append(dec_nums[-1])
                 
+                # Result dhoondho (PASSED/FAILED)
                 words = re.findall(r'\b(PASSED|FAILED|PASS|FAIL)\b', row_str.upper())
                 if words:
                     results.append(words[-1])
@@ -91,9 +102,13 @@ def smart_parse_v62(headers, rows):
                 pass_count = sum(1 for r in results if 'PASS' in r) if results else 0
                 return {"type": "transcript", "avg_spi": round(avg_spi,2), "avg_cpi": round(avg_cpi,2), 
                         "pass": pass_count, "fail": len(results)-pass_count, "toppers": names[:3]}
+            else:
+                # Agar SPI/CPI na mile toh fallback
+                pass
 
         # --- 1. MBA TRANSCRIPT (SPI/CPI in headers) ---
         if any('spi' in h for h in headers_lower) or any('cpi' in h for h in headers_lower):
+            st.info("📄 **MBA Transcript** detected (SPI/CPI headers).")
             name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'name' in h), None)
             spi_idx = next((i for i, h in enumerate(headers_lower) if 'spi' in h), None)
             cpi_idx = next((i for i, h in enumerate(headers_lower) if 'cpi' in h), None)
@@ -118,6 +133,7 @@ def smart_parse_v62(headers, rows):
 
         # --- 2. MBA FINAL RESULT (Rank, Total, SGPA) ---
         elif any('rank' in h for h in headers_lower) and any('grand total' in h for h in headers_lower):
+            st.info("📊 **MBA Final Result** detected.")
             sgpa_idx = next((i for i, h in enumerate(headers_lower) if 'sgpa' in h), None)
             total_idx = next((i for i, h in enumerate(headers_lower) if 'grand total' in h or 'total' in h), None)
             name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'name' in h), None)
@@ -138,6 +154,7 @@ def smart_parse_v62(headers, rows):
 
         # --- 3. SEMESTER MARKSHEET ---
         elif any('sem' in h for h in headers_lower) and any('mark' in h or 'subject' in h for h in headers_lower):
+            st.info("📚 **Semester Marksheet** detected.")
             sem_idx = next((i for i, h in enumerate(headers_lower) if 'sem' in h), None)
             marks_idx = next((i for i, h in enumerate(headers_lower) if 'mark' in h or 'score' in h), None)
             
@@ -157,7 +174,7 @@ def smart_parse_v62(headers, rows):
                 return {"type": "semester", "cgpa": cgpa, "sgpa_data": sgpa_data}
 
         else:
-            return {"type": "unknown", "msg": "Data read, but iPa couldn't auto-detect structure. Displaying raw table."}
+            return {"type": "unknown", "msg": "Data read, displaying raw table."}
     except Exception as e:
         return {"type": "error", "msg": str(e)}
 
@@ -167,9 +184,9 @@ if uploaded_file is not None:
     headers = []
     rows = []
     
-    with st.spinner("🔄 iPa v6.2 analyzing..."):
+    with st.spinner("🔄 iPa v6.3 analyzing..."):
         try:
-            # --- READING LOGIC (Same as before, robust) ---
+            # --- READING LOGIC (Same as before) ---
             if file_name.endswith('.csv'):
                 content = uploaded_file.read().decode('utf-8')
                 reader = csv.reader(io.StringIO(content))
@@ -260,48 +277,51 @@ if uploaded_file is not None:
                 st.error("❌ Unsupported format")
                 st.stop()
 
-            # ================== FIX 1 & 2: DISPLAY WITH SERIAL 1 SE START ==================
+            # ================== FIX 1: HIDE THE BLUE INDEX ==================
             st.subheader("📋 Raw Data Preview")
             if headers and rows:
                 df_display = pd.DataFrame(rows, columns=headers)
-                # 🔥 MAGIC LINE: Index 1 se start karo (0 nahi!)
-                df_display.index = range(1, len(df_display) + 1)
-                st.dataframe(df_display, use_container_width=True, height=400)
+                df_display.index = range(1, len(df_display) + 1)  # Serial 1 se start
+                # 🔥 MAGIC: Style hide index removes the blue number column!
+                st.dataframe(df_display.style.hide(axis='index'), use_container_width=True, height=400)
 
             # ================== RUN ANALYSIS ==================
-            result = smart_parse_v62(headers, rows)
+            result = smart_parse_v63(headers, rows)
             
             if result and result.get("type") == "transcript":
+                st.info("📌 **Batch Level Stats (Average of all students):**")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📈 Avg SPI", result['avg_spi']); c2.metric("📊 Avg CPI", result['avg_cpi'])
-                c3.metric("✅ Pass", result['pass']); c4.metric("❌ Fail", result['fail'])
-                # 🔥 FIX: Toppers ka naam chhota (st.success hatao, markdown use karo)
+                c1.metric("📈 Average SPI", result['avg_spi'])
+                c2.metric("📊 Average CPI", result['avg_cpi'])
+                c3.metric("✅ Total Pass", result['pass'])
+                c4.metric("❌ Total Fail", result['fail'])
                 if result.get('toppers'):
                     st.markdown(f"**🏆 Top 3 Toppers:** {', '.join(result['toppers'])}")
                 
             elif result and result.get("type") == "result":
+                st.info("📌 **Batch Level Stats (All 96 students combined):**")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📈 CGPA", f"{result['cgpa']}/10"); c2.metric("👨‍🎓 Total", result['total'])
-                c3.metric("📊 Avg Total", result['avg_total'])
+                c1.metric("📈 Batch CGPA", f"{result['cgpa']}/10 (Avg of all SGPAs)")
+                c2.metric("👨‍🎓 Total Students", result['total'])
+                c3.metric("📊 Average Grand Total", result['avg_total'])  # 🔥 Yeh batayega ki average marks 524.5 hai
                 if result.get('toppers'):
                     st.markdown(f"**🏆 Top 3 Toppers:** {', '.join(result['toppers'])}")
                 
             elif result and result.get("type") == "semester":
                 c1, c2 = st.columns(2)
-                c1.metric("📈 CGPA", f"{result['cgpa']}/10"); c2.metric("📚 Semesters", len(result['sgpa_data']))
+                c1.metric("📈 CGPA", f"{result['cgpa']}/10 (Your overall)")
+                c2.metric("📚 Semesters", len(result['sgpa_data']))
                 
                 st.subheader("📊 Semester-wise SGPA")
                 sgpa_data = result['sgpa_data']
-                # 🔥 FIX: Ensure mapping is absolutely correct
                 df_table = pd.DataFrame({
                     "Semester": [str(s[0]) for s in sgpa_data],
-                    "SGPA": [float(s[1]) for s in sgpa_data],  # Force float
-                    "Subjects": [int(s[2]) for s in sgpa_data]  # Force int
+                    "SGPA": [float(s[1]) for s in sgpa_data],
+                    "Subjects": [int(s[2]) for s in sgpa_data]
                 })
-                df_table.index = range(1, len(df_table) + 1)  # Serial 1 se start
-                st.table(df_table)
+                df_table.index = range(1, len(df_table) + 1)
+                st.table(df_table.style.hide(axis='index'))
                 
-                # Chart (Bar)
                 try:
                     chart_df = pd.DataFrame({
                         "Semester": [str(s[0]) for s in sgpa_data],
@@ -324,4 +344,4 @@ else:
     st.info("👆 Upload your document or image!")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.2 | The Serial Killer</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.3 | The Clarifier</p>", unsafe_allow_html=True)
