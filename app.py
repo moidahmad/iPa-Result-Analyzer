@@ -7,9 +7,9 @@ from fpdf import FPDF
 import random
 
 # ===================== PAGE CONFIG =====================
-st.set_page_config(page_title="iPa Result Analyzer v7.0", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="iPa Result Analyzer v7.1", layout="wide", initial_sidebar_state="expanded")
 
-# ===================== CUSTOM CSS (PROFESSIONAL LOOK) =====================
+# ===================== CUSTOM CSS =====================
 st.markdown("""
 <style>
     .stApp { background-color: #f1f5f9; }
@@ -24,38 +24,43 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ===================== SIDEBAR =====================
-st.sidebar.markdown("## 🧠 iPa Analyzer v7.0")
+st.sidebar.markdown("## 🧠 iPa Analyzer v7.1")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📦 Features:**")
 st.sidebar.markdown("- UGC Credit-Based SGPA (26 Credits)")
 st.sidebar.markdown("- Export Excel & PDF")
 st.sidebar.markdown("- Tie-Breaker + Name Fix")
 st.sidebar.markdown("- Enrollment No. Column Added")
+st.sidebar.markdown("- Sr. No. Column Fixed")
 st.sidebar.markdown("---")
 st.sidebar.caption("Built with ❤️ for Moid | Deen + Dunya")
 
-# ===================== FILE UPLOADER =====================
 uploaded_file = st.file_uploader(
     "Upload Document (TXT, PDF, Image, CSV, Excel)",
     type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== SPACE INJECTOR FUNCTION (FIX 1) ========================
-def clean_glued_name(name):
-    """Insert spaces into glued names like SHAIKHMDJAVEDSHAIKHMDNAEEM"""
+# ======================== ULTIMATE SPACE INJECTOR (FIX 2) ========================
+def ultimate_space_injector(name):
+    """Insert spaces between capital letters. E.g., MoidAhmad -> Moid Ahmad"""
     if ' ' in name:
         return name
     
-    # Known prefixes/tokens in names (Sorted by length to avoid partial matches)
+    # Insert space before every capital letter that follows a lowercase letter
+    # e.g., "MoidAhmad" -> "Moid Ahmad"
+    name_with_spaces = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+    
+    # Also handle cases like "MDJAVED" -> "MD JAVED"
+    # Insert space between known tokens (like MD, SHAIKH, etc.)
     tokens = ['MOHAMMED', 'MOHD', 'ABDUL', 'SHAIKH', 'SYED', 'HASAN', 'HUSAIN', 'AHMAD', 'KHAN', 'MD', 'BIN', 'ALI']
     for token in tokens:
-        name = name.replace(token, f' {token}')
+        name_with_spaces = name_with_spaces.replace(token, f' {token}')
     
-    # Clean up extra spaces and trim
-    name = ' '.join(name.split())
-    return name
+    # Clean up extra spaces
+    name_with_spaces = ' '.join(name_with_spaces.split())
+    return name_with_spaces
 
-# ======================== CORE PARSER (FIXED) ========================
+# ======================== CORE PARSER ========================
 def parse_mba_odl(text):
     lines = text.split('\n')
     data = []
@@ -68,13 +73,11 @@ def parse_mba_odl(text):
         if len(parts) < 20:
             continue
             
-        # Find result
         try:
             res_idx = parts.index('PASSED') if 'PASSED' in parts else parts.index('FAILED')
         except ValueError:
             continue
         
-        # Find subject start
         sub_start = -1
         for i in range(4, res_idx):
             token = parts[i]
@@ -88,9 +91,9 @@ def parse_mba_odl(text):
         # --- BASIC INFO ---
         sl = parts[0]
         rc = parts[1]
-        enrl_no = parts[2]  # Enrollment No
+        enrl_no = parts[2]
         
-        # --- ROLL NO + NAME (FIXED: 11-char Roll No pattern) ---
+        # --- ROLL NO + NAME ---
         raw_roll = parts[3]
         roll_match = re.match(r'^(25MBAQ\d{3}[A-Z]{2})(.*)', raw_roll)
         
@@ -101,21 +104,19 @@ def parse_mba_odl(text):
             roll = raw_roll
             name_extra = ""
         
-        # Name tokens (if not glued)
         name_tokens = parts[4:sub_start]
         if name_extra:
             full_name = name_extra
         else:
             full_name = ' '.join(name_tokens)
         
-        # --- APPLY SPACE INJECTOR (FIX 1) ---
-        full_name = clean_glued_name(full_name)
+        # --- APPLY ULTIMATE SPACE INJECTOR ---
+        full_name = ultimate_space_injector(full_name)
         
-        # Fallback
         if not full_name:
             full_name = roll
         
-        # --- SUBJECT EXTRACTION (Credit-Based) ---
+        # --- SUBJECT EXTRACTION ---
         subject_tokens = parts[sub_start:res_idx]
         if len(subject_tokens) < 25:
             continue
@@ -123,7 +124,7 @@ def parse_mba_odl(text):
         weighted_sum = 0
         raw_total = 0
         
-        # Subjects 1-7 (out of 100)
+        # Subjects 1-7
         for i in range(7):
             a_str = subject_tokens[i*3]
             t_str = subject_tokens[i*3 + 1]
@@ -142,7 +143,7 @@ def parse_mba_odl(text):
             else: gp = 0
             weighted_sum += gp * credits[i]
         
-        # Subject 8 (LS) - out of 50
+        # Subject 8 (LS)
         p8 = float(re.sub(r'[^0-9.]', '', subject_tokens[21])) if subject_tokens[21].replace('.','',1).isdigit() or subject_tokens[21].isdigit() else 0
         raw_total += p8
         pct_ls = (p8 / 50) * 100
@@ -156,7 +157,7 @@ def parse_mba_odl(text):
         else: gp_ls = 0
         weighted_sum += gp_ls * credits[7]
         
-        # Subject 9 (EA) - out of 50
+        # Subject 9 (EA)
         p9 = float(re.sub(r'[^0-9.]', '', subject_tokens[23])) if subject_tokens[23].replace('.','',1).isdigit() or subject_tokens[23].isdigit() else 0
         raw_total += p9
         pct_ea = (p9 / 50) * 100
@@ -201,8 +202,20 @@ def parse_mba_odl(text):
     
     df = pd.DataFrame(data)
     df = df.sort_values(by=['SGPA', 'Total', 'Student Name'], ascending=[False, False, True])
-    df['Sr. No.'] = range(1, len(df) + 1)  # 🔥 FIX 2: Rank -> Sr. No.
-    df = df[['Sr. No.', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
+    
+    # 🔥 FIX: Rank column as original, and add Sr. No. before it
+    df['Rank'] = range(1, len(df) + 1)
+    # Move Sr. No. to the front
+    cols = df.columns.tolist()
+    # Remove 'Rank' from its current position and insert at start
+    cols.remove('Rank')
+    cols.insert(0, 'Sr. No.')  # This will be the index column (0,1,2,...)
+    cols.insert(1, 'Rank')     # Rank comes right after Sr. No.
+    # But we want the actual index to be Sr. No., not Rank.
+    # So we'll set index to Sr. No. and keep Rank as a column
+    df['Sr. No.'] = range(1, len(df) + 1)
+    df = df[['Sr. No.', 'Rank', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
+    
     return df
 
 # ======================== PDF GENERATOR ========================
@@ -211,36 +224,33 @@ def generate_pdf(df):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    # Title
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(200, 10, txt="MBA ODL Result Analysis (UGC Credit Rules)", ln=True, align='C')
     pdf.ln(8)
     
-    # Table Header
     pdf.set_font("Arial", 'B', 8)
-    headers = ['Sr. No.', 'Student Name', 'Enrollment', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
-    col_widths = [12, 50, 22, 25, 15, 15, 12, 18]
+    headers = ['Sr. No.', 'Rank', 'Student Name', 'Enrollment', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']
+    col_widths = [10, 10, 42, 18, 20, 15, 15, 12, 18]
     for i, h in enumerate(headers):
         pdf.cell(col_widths[i], 10, h, border=1, align='C')
     pdf.ln()
     
-    # Table Data
     pdf.set_font("Arial", '', 7)
     for _, row in df.iterrows():
         pdf.cell(col_widths[0], 8, str(row['Sr. No.']), border=1, align='C')
-        pdf.cell(col_widths[1], 8, str(row['Student Name'])[:22], border=1, align='L')
-        pdf.cell(col_widths[2], 8, str(row['Enrollment No']), border=1, align='C')
-        pdf.cell(col_widths[3], 8, str(row['Roll No']), border=1, align='C')
-        pdf.cell(col_widths[4], 8, str(row['Total']), border=1, align='C')
-        pdf.cell(col_widths[5], 8, f"{row['SGPA']:.2f}", border=1, align='C')
-        pdf.cell(col_widths[6], 8, str(row['Grade']), border=1, align='C')
-        pdf.cell(col_widths[7], 8, str(row['Result']), border=1, align='C')
+        pdf.cell(col_widths[1], 8, str(row['Rank']), border=1, align='C')
+        pdf.cell(col_widths[2], 8, str(row['Student Name'])[:20], border=1, align='L')
+        pdf.cell(col_widths[3], 8, str(row['Enrollment No']), border=1, align='C')
+        pdf.cell(col_widths[4], 8, str(row['Roll No']), border=1, align='C')
+        pdf.cell(col_widths[5], 8, str(row['Total']), border=1, align='C')
+        pdf.cell(col_widths[6], 8, f"{row['SGPA']:.2f}", border=1, align='C')
+        pdf.cell(col_widths[7], 8, str(row['Grade']), border=1, align='C')
+        pdf.cell(col_widths[8], 8, str(row['Result']), border=1, align='C')
         pdf.ln()
     
-    # Footer
     pdf.ln(6)
     pdf.set_font("Arial", 'I', 9)
-    pdf.cell(200, 10, txt="Generated by iPa v7.0 | For Moid", ln=True, align='C')
+    pdf.cell(200, 10, txt="Generated by iPa v7.1 | For Moid", ln=True, align='C')
     
     return pdf.output(dest='S').encode('latin1')
 
@@ -250,9 +260,8 @@ if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
     df_result = pd.DataFrame()
     
-    with st.spinner("🔄 iPa v7.0 analyzing..."):
+    with st.spinner("🔄 iPa v7.1 analyzing..."):
         try:
-            # --- READING LOGIC ---
             if file_name.endswith('.txt'):
                 content = uploaded_file.read().decode('utf-8')
                 df_result = parse_mba_odl(content)
@@ -325,15 +334,13 @@ if uploaded_file is not None:
                 
                 st.markdown("---")
                 
-                # Top 3
                 st.subheader("🏆 Top 3 Toppers")
                 top3 = df_result.head(3)
                 for _, row in top3.iterrows():
-                    st.markdown(f"**Sr. No. {row['Sr. No.']}:** {row['Student Name']} | SGPA: {row['SGPA']} | Total: {row['Total']} | Grade: {row['Grade']}")
+                    st.markdown(f"**Rank {row['Rank']}:** {row['Student Name']} | SGPA: {row['SGPA']} | Total: {row['Total']} | Grade: {row['Grade']}")
                 
                 st.markdown("---")
                 
-                # Full Table
                 st.subheader("📋 Complete Ranked List")
                 display_df = df_result.copy()
                 display_df.index = range(1, len(display_df) + 1)
@@ -345,7 +352,6 @@ if uploaded_file is not None:
                 
                 col1, col2 = st.columns(2)
                 
-                # Excel
                 with col1:
                     towrite = io.BytesIO()
                     with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
@@ -358,7 +364,6 @@ if uploaded_file is not None:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 
-                # PDF
                 with col2:
                     try:
                         pdf_bytes = generate_pdf(df_result)
@@ -382,4 +387,4 @@ else:
     st.info("👆 Upload your MBA ODL Result data (TXT, PDF, Image, CSV, Excel).")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.0 | Space Injector | Sr. No. Column Added</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.1 | Real Sr. No. + Ultimate Space Injector</p>", unsafe_allow_html=True)
