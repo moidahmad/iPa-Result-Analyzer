@@ -7,9 +7,9 @@ from fpdf import FPDF
 import random
 
 # ===================== PAGE CONFIG =====================
-st.set_page_config(page_title="iPa Result Analyzer v7.1", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="iPa Result Analyzer v7.2", layout="wide", initial_sidebar_state="expanded")
 
-# ===================== CUSTOM CSS =====================
+# ===================== CSS =====================
 st.markdown("""
 <style>
     .stApp { background-color: #f1f5f9; }
@@ -23,13 +23,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("## 🧠 iPa Analyzer v7.1")
+st.sidebar.markdown("## 🧠 iPa Analyzer v7.2")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📦 Features:**")
 st.sidebar.markdown("- UGC Credit-Based SGPA (26 Credits)")
 st.sidebar.markdown("- Export Excel & PDF")
-st.sidebar.markdown("- Tie-Breaker + Name Space Injector")
-st.sidebar.markdown("- Enrollment No. Column Added")
+st.sidebar.markdown("- Tie-Breaker + Smart Space Injector")
+st.sidebar.markdown("- Enrollment No. Column")
 st.sidebar.markdown("---")
 st.sidebar.caption("Built with ❤️ for Moid | Deen + Dunya")
 
@@ -38,50 +38,58 @@ uploaded_file = st.file_uploader(
     type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== SUPER SMART SPACE INJECTOR ========================
+# ======================== SMART SPACE INJECTOR (FIXED) ========================
 def clean_glued_name(name):
-    """Insert spaces into glued names (works for all patterns)"""
+    """Convert glued names (MOIDAHMAD) into spaced names (MOID AHMAD)"""
     if not name:
         return name
     
-    # Remove extra spaces
-    name = name.strip()
-    
-    # If already has a space, just trim and return
+    # Already has spaces — just trim and return
     if ' ' in name:
         return ' '.join(name.split())
     
-    # Comprehensive list of name tokens found in the PDF (sorted by length descending to avoid partial matches)
+    # Comprehensive name tokens (sorted by length descending)
     tokens = [
-        'MOHAMMED', 'MOHD', 'ABDUL', 'SHAIKH', 'SYED', 'QUTUBUDDIN', 'SHAIK', 
-        'MD', 'BIN', 'KHAN', 'HASAN', 'HUSAIN', 'AHMAD', 'ALI', 'JAVED', 
-        'NAEEM', 'NAGMA', 'SHAFI', 'ASRAR', 'MEER', 'YOUSUF', 'HAROON', 
-        'RAHMAN', 'WAHAB', 'FARID', 'ABBAS', 'SALMAN', 'RASHEED', 'AKHTAR', 
-        'ANJUM', 'SABIR', 'DANISH', 'JUNAID', 'SIMRAN', 'KAUSAR', 'ABUZAR', 
-        'MAQDOOM', 'IFTIKHAR', 'ZAMEER', 'ALAM', 'TABBASUM', 'PERVEEN', 
-        'RAZA', 'HUSSAIN', 'NOMAN', 'ARIF', 'FAIZ', 'MEHAR', 'NISAR', 
-        'SHAMS', 'AFTAB', 'SAFWAN', 'TAUQEER', 'SAQIB', 'BANO', 'MUGERA', 
-        'ADNAN', 'KAMAL', 'AHMED', 'ASIF', 'ANWER', 'SIDDIQUI', 'FARAZ',
-        'KASHIF', 'NASEEM', 'RIZWAN', 'EHTASHAM', 'ISHFAQ', 'MAQBOOL', 
-        'NAYYAR', 'SOHAIL', 'TANVEER', 'ZAHID', 'SHAHID', 'SHAKIR', 'MOID'
+        'MOHAMMED', 'QUTUBUDDIN', 'MOHD', 'ABDUL', 'SHAIKH', 'SYED', 
+        'MOHAMMAD', 'MOHAMED', 'SHAIK', 'ABDULLAH', 'NAEEM', 'AHMAD', 
+        'JAVED', 'NAGMA', 'SHAFI', 'ASRAR', 'MEER', 'YOUSUF', 
+        'HAROON', 'RAHMAN', 'WAHAB', 'FARID', 'ABBAS', 'SALMAN', 
+        'AKHTAR', 'ANJUM', 'SABIR', 'DANISH', 'JUNAID', 'SIMRAN', 
+        'KAUSAR', 'ABUZAR', 'MAQDOOM', 'IFTIKHAR', 'ZAMEER', 
+        'ALAM', 'TABBASUM', 'PERVEEN', 'RAZA', 'HUSSAIN', 
+        'NOMAN', 'ARIF', 'FAIZ', 'MEHAR', 'NISAR', 'SHAMS', 
+        'AFTAB', 'SAFWAN', 'TAUQEER', 'SAQIB', 'BANO', 'MUGERA', 
+        'ADNAN', 'KAMAL', 'AHMED', 'ASIF', 'ANWER', 'SIDDIQUI', 
+        'FARAZ', 'KASHIF', 'NASEEM', 'RIZWAN', 'EHTASHAM', 
+        'ISHFAQ', 'MAQBOOL', 'NAYYAR', 'SOHAIL', 'TANVEER', 
+        'ZAHID', 'SHAHID', 'SHAKIR', 'MOID', 'AHMAD', 'ALI', 
+        'KHAN', 'BIN', 'MD', 'HASAN', 'ABD', 'RAHMAT', 'HADI',
+        'UL', 'WARA', 'BEGUM', 'FATIMA', 'ZEESHAN', 'FURQAN'
     ]
     
-    # Sort by length descending to match longer tokens first (e.g., MOHAMMED before MD)
+    # Sort by length descending (longer tokens first)
     tokens_sorted = sorted(tokens, key=len, reverse=True)
     
-    # Build a regex pattern
-    pattern = '|'.join(re.escape(token) for token in tokens_sorted)
-    
-    # Insert spaces before matched tokens
-    result = re.sub(r'(?<![A-Z])(' + pattern + r')', r' \1', name)
+    result = name
+    for token in tokens_sorted:
+        new_result = ''
+        i = 0
+        while i < len(result):
+            # Check if token matches at this position
+            if i + len(token) <= len(result) and result[i:i+len(token)] == token:
+                # If token is not at start and previous char is a letter (glued case)
+                if i > 0 and result[i-1].isalpha():
+                    new_result += ' ' + token
+                else:
+                    new_result += token
+                i += len(token)
+            else:
+                new_result += result[i]
+                i += 1
+        result = new_result
     
     # Clean up extra spaces
     result = ' '.join(result.split())
-    
-    # If result is still the same (no tokens found), return original
-    if result == name:
-        return name
-    
     return result
 
 # ======================== CORE PARSER ========================
@@ -134,7 +142,7 @@ def parse_mba_odl(text):
         else:
             full_name = ' '.join(name_tokens)
         
-        # --- APPLY SPACE INJECTOR ---
+        # --- SMART SPACE INJECTOR (FIXED) ---
         full_name = clean_glued_name(full_name)
         if not full_name:
             full_name = roll
@@ -147,7 +155,6 @@ def parse_mba_odl(text):
         weighted_sum = 0
         raw_total = 0
         
-        # Subjects 1-7
         for i in range(7):
             a_str = subject_tokens[i*3]
             t_str = subject_tokens[i*3 + 1]
@@ -166,7 +173,6 @@ def parse_mba_odl(text):
             else: gp = 0
             weighted_sum += gp * credits[i]
         
-        # Subject 8 (LS)
         p8 = float(re.sub(r'[^0-9.]', '', subject_tokens[21])) if subject_tokens[21].replace('.','',1).isdigit() or subject_tokens[21].isdigit() else 0
         raw_total += p8
         pct_ls = (p8 / 50) * 100
@@ -180,7 +186,6 @@ def parse_mba_odl(text):
         else: gp_ls = 0
         weighted_sum += gp_ls * credits[7]
         
-        # Subject 9 (EA)
         p9 = float(re.sub(r'[^0-9.]', '', subject_tokens[23])) if subject_tokens[23].replace('.','',1).isdigit() or subject_tokens[23].isdigit() else 0
         raw_total += p9
         pct_ea = (p9 / 50) * 100
@@ -196,7 +201,6 @@ def parse_mba_odl(text):
         
         sgpa = round(weighted_sum / total_credits, 2)
         
-        # Grade Mapping
         if sgpa >= 9.0: grade = 'O'
         elif sgpa >= 7.5: grade = 'A+'
         elif sgpa >= 6.0: grade = 'A'
@@ -224,11 +228,8 @@ def parse_mba_odl(text):
         return pd.DataFrame()
     
     df = pd.DataFrame(data)
-    # --- SORT & RANK (Tie-breaker) ---
     df = df.sort_values(by=['SGPA', 'Total', 'Student Name'], ascending=[False, False, True])
-    df['Rank'] = range(1, len(df) + 1)  # Rank column (1,2,3...)
-    
-    # Final columns: Rank first, then others
+    df['Rank'] = range(1, len(df) + 1)
     df = df[['Rank', 'SL', 'Student Name', 'Enrollment No', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
     return df
 
@@ -263,7 +264,7 @@ def generate_pdf(df):
     
     pdf.ln(6)
     pdf.set_font("Arial", 'I', 9)
-    pdf.cell(200, 10, txt="Generated by iPa v7.1 | For Moid", ln=True, align='C')
+    pdf.cell(200, 10, txt="Generated by iPa v7.2 | For Moid", ln=True, align='C')
     
     return pdf.output(dest='S').encode('latin1')
 
@@ -273,7 +274,7 @@ if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
     df_result = pd.DataFrame()
     
-    with st.spinner("🔄 iPa v7.1 analyzing..."):
+    with st.spinner("🔄 iPa v7.2 analyzing..."):
         try:
             if file_name.endswith('.txt'):
                 content = uploaded_file.read().decode('utf-8')
@@ -356,7 +357,6 @@ if uploaded_file is not None:
                 st.subheader("📋 Complete Ranked List")
                 display_df = df_result.copy()
                 display_df.index = range(1, len(display_df) + 1)
-                # 🔥 HIDE THE EMPTY INDEX COLUMN (Rank is already the first data column)
                 st.dataframe(display_df.style.hide(axis='index'), use_container_width=True, height=500)
                 
                 st.markdown("---")
@@ -399,4 +399,4 @@ else:
     st.info("👆 Upload your MBA ODL Result data.")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.1 | Rank Only | Space Injector</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v7.2 | Smart Space Injector | Rank Only</p>", unsafe_allow_html=True)
