@@ -1,13 +1,10 @@
 import streamlit as st
 import re
-import csv
-import io
 import pandas as pd
 from collections import defaultdict
-from PIL import Image
 
 # ===================== ULTRA PROFESSIONAL UI =====================
-st.set_page_config(page_title="iPa Result Analyzer v6.3", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="iPa Result Analyzer v6.4", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -22,326 +19,236 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("## 🧠 iPa Analyzer v6.3")
+st.sidebar.markdown("## 🧠 iPa Analyzer v6.4")
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Supports:** CSV | Excel | PDF | Images")
-st.sidebar.markdown("**Fixes:** Blue Index hidden, Stats explained, PDF SPI/CPI extracted")
+st.sidebar.markdown("**UGC Rule + Tie-Breaker Enabled**")
 
 uploaded_file = st.file_uploader(
-    "Upload Document",
-    type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg']
+    "Upload Document (CSV, XLSX, PDF, Image, or TXT containing MBA ODL Data)",
+    type=['csv', 'xlsx', 'pdf', 'png', 'jpg', 'jpeg', 'txt']
 )
 
-# ======================== PARSER ENGINE ========================
+# ======================== CORE PARSER (UGC RULE) ========================
 
-def clean_headers(headers):
-    cleaned = []
-    seen = {}
-    for h in headers:
-        h = str(h).strip()
-        if not h or h.lower() in ['nan', 'none']:
-            h = "Unknown_Col"
-        if h in seen:
-            seen[h] += 1
-            cleaned.append(f"{h}_{seen[h]}")
-        else:
-            seen[h] = 0
-            cleaned.append(h)
-    return cleaned
-
-def normalize_rows(rows, target_cols):
-    norm_rows = []
-    for row in rows:
-        if len(row) < target_cols:
-            row = list(row) + [''] * (target_cols - len(row))
-        elif len(row) > target_cols:
-            row = row[:target_cols]
-        norm_rows.append(row)
-    return norm_rows
-
-def smart_parse_v63(headers, rows):
-    try:
-        headers_lower = [str(h).lower().strip() for h in headers]
+def parse_mba_odl_text(text):
+    """Parse the specific 9-subject MBA ODL format with UGC rules."""
+    lines = text.split('\n')
+    data = []
+    
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 20:  # Minimum valid row
+            continue
+            
+        # Find Result column (PASSED or FAILED)
+        try:
+            idx_res = parts.index('PASSED') if 'PASSED' in parts else parts.index('FAILED')
+        except ValueError:
+            continue
         
-        # --- 0. WIDE MBA TRANSCRIPT (SPI/CPI hidden in data) ----
-        if (any('student' in h or 'roll' in h for h in headers_lower) and len(headers) > 10):
-            st.info("📄 **Wide MBA Transcript** detected! iPa is scanning the last 5 columns for SPI/CPI.")
-            name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'roll' in h or 'name' in h), None)
+        # Basic Info
+        sl = parts[0]
+        rc = parts[1]
+        enrl = parts[2]
+        roll = parts[3]
+        
+        # Result & Grade
+        result = parts[idx_res]
+        sgpa_str = parts[idx_res + 1] if idx_res + 1 < len(parts) else '-'
+        grade = parts[idx_res + 2] if idx_res + 2 < len(parts) else '-'
+        
+        # Name tokens (between roll number and subject 1)
+        # We know exactly 25 tokens are for 9 subjects (7*3 + 2*2 = 25)
+        name_tokens = parts[4 : idx_res - 25]
+        name = ' '.join(name_tokens)
+        
+        # Extract subjects from the end (backward indexing)
+        try:
+            # Subject 9: P9, R9
+            p9 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 2])) if parts[idx_res - 2].replace('.','',1).isdigit() else 0
+            r9 = parts[idx_res - 1]
             
-            spis, cpis, results, names = [], [], [], []
-            for row in rows:
-                if name_idx is not None and len(row) > name_idx:
-                    names.append(str(row[name_idx]).strip())
-                
-                # 🔥 SMART TRICK: Row ke last 15 columns ko check karo (kyunki SPI/CPI bilkul end mein hote hain)
-                row_len = len(row)
-                if row_len > 15:
-                    # Slicing karo (last 15 items)
-                    last_items = row[row_len-15:row_len]
-                    row_str = ' '.join(map(str, last_items))
-                else:
-                    row_str = ' '.join(map(str, row))
-                
-                # 🔥 Ab is chhote se part mein decimal numbers dhoondho (e.g., 8.96, 7.28)
-                nums = re.findall(r'\b(\d+\.\d+)\b', row_str)
-                dec_nums = [float(n) for n in nums if 0 <= float(n) <= 10]
-                
-                if len(dec_nums) >= 2:
-                    # Maan lo ki last 2 decimals SPI aur CPI hain
-                    spis.append(dec_nums[-2])
-                    cpis.append(dec_nums[-1])
-                
-                # Result dhoondho (PASSED/FAILED)
-                words = re.findall(r'\b(PASSED|FAILED|PASS|FAIL)\b', row_str.upper())
-                if words:
-                    results.append(words[-1])
+            # Subject 8: P8, R8
+            p8 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 4])) if parts[idx_res - 4].replace('.','',1).isdigit() else 0
+            r8 = parts[idx_res - 3]
             
-            if spis and cpis:
-                avg_spi = sum(spis)/len(spis) if spis else 0
-                avg_cpi = sum(cpis)/len(cpis) if cpis else 0
-                pass_count = sum(1 for r in results if 'PASS' in r) if results else 0
-                return {"type": "transcript", "avg_spi": round(avg_spi,2), "avg_cpi": round(avg_cpi,2), 
-                        "pass": pass_count, "fail": len(results)-pass_count, "toppers": names[:3]}
-            else:
-                # Agar SPI/CPI na mile toh fallback
-                pass
-
-        # --- 1. MBA TRANSCRIPT (SPI/CPI in headers) ---
-        if any('spi' in h for h in headers_lower) or any('cpi' in h for h in headers_lower):
-            st.info("📄 **MBA Transcript** detected (SPI/CPI headers).")
-            name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'name' in h), None)
-            spi_idx = next((i for i, h in enumerate(headers_lower) if 'spi' in h), None)
-            cpi_idx = next((i for i, h in enumerate(headers_lower) if 'cpi' in h), None)
-            result_idx = next((i for i, h in enumerate(headers_lower) if 'result' in h), None)
+            # Subject 7 to 1: A, T, R
+            a7 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 7])) if parts[idx_res - 7].replace('.','',1).isdigit() else 0
+            t7 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 6])) if parts[idx_res - 6].replace('.','',1).isdigit() else 0
+            r7 = parts[idx_res - 5]
             
-            spis, cpis, results, names = [], [], [], []
-            for row in rows:
-                if name_idx is not None and len(row) > name_idx: names.append(str(row[name_idx]).strip())
-                if spi_idx is not None and len(row) > spi_idx:
-                    m = re.search(r'(\d+\.?\d*)', str(row[spi_idx])); 
-                    if m: spis.append(float(m.group(1)))
-                if cpi_idx is not None and len(row) > cpi_idx:
-                    m = re.search(r'(\d+\.?\d*)', str(row[cpi_idx])); 
-                    if m: cpis.append(float(m.group(1)))
-                if result_idx is not None and len(row) > result_idx: results.append(str(row[result_idx]).strip().upper())
+            a6 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 10])) if parts[idx_res - 10].replace('.','',1).isdigit() else 0
+            t6 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 9])) if parts[idx_res - 9].replace('.','',1).isdigit() else 0
+            r6 = parts[idx_res - 8]
             
-            avg_spi = sum(spis)/len(spis) if spis else 0
-            avg_cpi = sum(cpis)/len(cpis) if cpis else 0
-            pass_count = sum(1 for r in results if 'PASS' in r) if results else 0
-            return {"type": "transcript", "avg_spi": round(avg_spi,2), "avg_cpi": round(avg_cpi,2), 
-                    "pass": pass_count, "fail": len(results)-pass_count, "toppers": names[:3]}
-
-        # --- 2. MBA FINAL RESULT (Rank, Total, SGPA) ---
-        elif any('rank' in h for h in headers_lower) and any('grand total' in h for h in headers_lower):
-            st.info("📊 **MBA Final Result** detected.")
-            sgpa_idx = next((i for i, h in enumerate(headers_lower) if 'sgpa' in h), None)
-            total_idx = next((i for i, h in enumerate(headers_lower) if 'grand total' in h or 'total' in h), None)
-            name_idx = next((i for i, h in enumerate(headers_lower) if 'student' in h or 'name' in h), None)
+            a5 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 13])) if parts[idx_res - 13].replace('.','',1).isdigit() else 0
+            t5 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 12])) if parts[idx_res - 12].replace('.','',1).isdigit() else 0
+            r5 = parts[idx_res - 11]
             
-            sgpas, totals, names = [], [], []
-            for row in rows:
-                if name_idx is not None and len(row) > name_idx: names.append(str(row[name_idx]).strip())
-                if sgpa_idx is not None and len(row) > sgpa_idx:
-                    m = re.search(r'(\d+\.?\d*)', str(row[sgpa_idx]))
-                    if m: sgpas.append(float(m.group(1)))
-                if total_idx is not None and len(row) > total_idx:
-                    m = re.search(r'(\d+\.?\d*)', str(row[total_idx]))
-                    if m: totals.append(float(m.group(1)))
+            a4 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 16])) if parts[idx_res - 16].replace('.','',1).isdigit() else 0
+            t4 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 15])) if parts[idx_res - 15].replace('.','',1).isdigit() else 0
+            r4 = parts[idx_res - 14]
             
-            avg_sgpa = sum(sgpas)/len(sgpas) if sgpas else 0
-            return {"type": "result", "cgpa": round(avg_sgpa,2), "total": len(sgpas), 
-                    "avg_total": round(sum(totals)/len(totals),2) if totals else 0, "toppers": names[:3]}
-
-        # --- 3. SEMESTER MARKSHEET ---
-        elif any('sem' in h for h in headers_lower) and any('mark' in h or 'subject' in h for h in headers_lower):
-            st.info("📚 **Semester Marksheet** detected.")
-            sem_idx = next((i for i, h in enumerate(headers_lower) if 'sem' in h), None)
-            marks_idx = next((i for i, h in enumerate(headers_lower) if 'mark' in h or 'score' in h), None)
+            a3 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 19])) if parts[idx_res - 19].replace('.','',1).isdigit() else 0
+            t3 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 18])) if parts[idx_res - 18].replace('.','',1).isdigit() else 0
+            r3 = parts[idx_res - 17]
             
-            sem_marks = defaultdict(list)
-            for row in rows:
-                if sem_idx is not None and marks_idx is not None and len(row) > max(sem_idx, marks_idx):
-                    sem_val = str(row[sem_idx]).strip()
-                    m = re.search(r'(\d+\.?\d*)', str(row[marks_idx]))
-                    if m: sem_marks[sem_val].append(float(m.group(1)))
+            a2 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 22])) if parts[idx_res - 22].replace('.','',1).isdigit() else 0
+            t2 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 21])) if parts[idx_res - 21].replace('.','',1).isdigit() else 0
+            r2 = parts[idx_res - 20]
             
-            sgpa_data = []
-            for sem, marks in sem_marks.items():
-                avg = sum(marks)/len(marks)
-                sgpa_data.append([sem, round(avg/10.0, 2), len(marks)])
-            if sgpa_data:
-                cgpa = round(sum(s[1] for s in sgpa_data)/len(sgpa_data), 2)
-                return {"type": "semester", "cgpa": cgpa, "sgpa_data": sgpa_data}
-
+            a1 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 25])) if parts[idx_res - 25].replace('.','',1).isdigit() else 0
+            t1 = float(re.sub(r'[^0-9.]', '', parts[idx_res - 24])) if parts[idx_res - 24].replace('.','',1).isdigit() else 0
+            r1 = parts[idx_res - 23]
+            
+        except (ValueError, IndexError):
+            continue
+        
+        # Calculate Total Marks
+        total = a1+t1 + a2+t2 + a3+t3 + a4+t4 + a5+t5 + a6+t6 + a7+t7 + p8 + p9
+        
+        # Check Failures
+        if 'F' in [r1, r2, r3, r4, r5, r6, r7, r8, r9] or result == 'FAILED':
+            final_result = 'FAILED'
+            # For failed, SGPA calculation still works for records, but we can keep passed calculation
         else:
-            return {"type": "unknown", "msg": "Data read, displaying raw table."}
-    except Exception as e:
-        return {"type": "error", "msg": str(e)}
+            final_result = 'PASSED'
+        
+        # UGC SGPA Rule (Max Marks = 720)
+        sgpa = round((total / 720) * 10, 2) if total > 0 else 0.0
+        
+        data.append({
+            "SL": sl,
+            "RC/SRC": rc,
+            "Enrl No": enrl,
+            "Roll No": roll,
+            "Student Name": name,
+            "Total": total,
+            "SGPA": sgpa,
+            "Result": final_result,
+            "Grade": grade if grade != '-' else ('O' if sgpa >= 9.0 else 'A+' if sgpa >= 8.5 else 'A' if sgpa >= 8.0 else 'B+' if sgpa >= 7.5 else 'B' if sgpa >= 7.0 else 'C' if sgpa >= 6.0 else 'P' if sgpa >= 5.0 else 'F')
+        })
+    
+    if not data:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(data)
+    
+    # --- TIE-BREAKER RULE (UGC Standard) ---
+    # 1. Sort by SGPA (Desc), then Total (Desc)
+    df = df.sort_values(by=['SGPA', 'Total'], ascending=[False, False])
+    
+    # 2. Assign Rank
+    df['Rank'] = range(1, len(df) + 1)
+    
+    # Re-arrange columns for display
+    df = df[['Rank', 'SL', 'Student Name', 'Roll No', 'Total', 'SGPA', 'Grade', 'Result']]
+    return df
 
 # ======================== MAIN ENGINE ========================
+
 if uploaded_file is not None:
     file_name = uploaded_file.name.lower()
-    headers = []
-    rows = []
+    df_result = pd.DataFrame()
     
-    with st.spinner("🔄 iPa v6.3 analyzing..."):
+    with st.spinner("🔄 iPa v6.4 analyzing with UGC rules..."):
         try:
-            # --- READING LOGIC (Same as before) ---
-            if file_name.endswith('.csv'):
+            # ---- 1. TEXT / TXT / Raw Data ----
+            if file_name.endswith('.txt'):
                 content = uploaded_file.read().decode('utf-8')
-                reader = csv.reader(io.StringIO(content))
-                headers = clean_headers(next(reader))
-                rows = normalize_rows(list(reader), len(headers))
-                st.success("✅ CSV Loaded!")
+                df_result = parse_mba_odl_text(content)
+                st.success("✅ Raw Text Data Parsed Successfully!")
+            
+            # ---- 2. CSV / EXCEL (if user uploads structured) ----
+            elif file_name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+                # Check if it's the raw wide format (like 9 subjects) or already final
+                if len(df.columns) > 15:
+                    # We expect our parse function to handle, but let's use the raw text logic by converting to text
+                    # Simpler: Just read as is and try to map if columns match
+                    # But since user provided raw text, they will likely upload .txt
+                    st.warning("⚠️ CSV uploaded. If it contains raw data, please paste as .txt file. Displaying raw CSV.")
+                    df_result = df
+                else:
+                    df_result = df
             
             elif file_name.endswith('.xlsx'):
                 import openpyxl
-                wb = openpyxl.load_workbook(uploaded_file, data_only=True)
-                sheet = wb.active
-                headers = clean_headers([cell.value for cell in sheet[1]])
-                raw_rows = []
-                for row in sheet.iter_rows(min_row=2, values_only=True):
-                    raw_rows.append(list(row))
-                rows = normalize_rows(raw_rows, len(headers))
-                st.success("✅ Excel Loaded!")
+                df = pd.read_excel(uploaded_file)
+                st.warning("⚠️ Excel uploaded. If it contains raw data, please paste as .txt file. Displaying raw Excel.")
+                df_result = df
             
-            elif file_name.endswith('.pdf'):
+            # ---- 3. PDF / IMAGE (OCR and then Parse) ----
+            elif file_name.endswith(('pdf', 'png', 'jpg', 'jpeg')):
                 try:
-                    import pdfplumber
-                    with pdfplumber.open(uploaded_file) as pdf:
-                        all_rows = []
-                        for page in pdf.pages:
-                            table = page.extract_table()
-                            if table:
-                                if not headers:
-                                    headers = clean_headers(table[0])
-                                    all_rows.extend(table[1:])
-                                else:
-                                    all_rows.extend(table[1:])
-                        if not all_rows:
-                            text = ""
+                    text = ""
+                    if file_name.endswith('.pdf'):
+                        import pdfplumber
+                        with pdfplumber.open(uploaded_file) as pdf:
                             for page in pdf.pages:
                                 text += page.extract_text() or ""
-                            lines = [line.split() for line in text.split('\n') if line.strip()]
-                            header_keywords = ['rank', 'roll', 'name', 'spi', 'cpi', 'result']
-                            header_idx = -1
-                            for i, line in enumerate(lines):
-                                line_lower = ' '.join(line).lower()
-                                if any(k in line_lower for k in header_keywords) and len(line) > 4:
-                                    header_idx = i; break
-                            if header_idx != -1:
-                                headers = clean_headers(lines[header_idx])
-                                all_rows = lines[header_idx+1:]
-                            else:
-                                if len(lines) > 1:
-                                    headers = clean_headers(lines[0])
-                                    all_rows = lines[1:]
-                                else:
-                                    headers = ['Raw_Data']; all_rows = lines
-                        rows = normalize_rows(all_rows, len(headers))
-                    st.success("✅ PDF Loaded!")
-                except ImportError:
-                    st.error("❌ pdfplumber missing.")
-                    st.stop()
-            
-            elif file_name.endswith(('png', 'jpg', 'jpeg')):
-                try:
-                    import pytesseract
-                    image = Image.open(uploaded_file)
-                    text = pytesseract.image_to_string(image)
-                    lines = [line.split() for line in text.split('\n') if line.strip()]
-                    
-                    if lines:
-                        header_keywords = ['rank', 'roll', 'name', 'spi', 'cpi', 'result', 'sem', 'mark']
-                        header_idx = -1
-                        for i, line in enumerate(lines):
-                            line_lower = ' '.join(line).lower()
-                            if any(k in line_lower for k in header_keywords) and len(line) > 3:
-                                header_idx = i; break
-                        if header_idx != -1:
-                            headers = clean_headers(lines[header_idx])
-                            rows = normalize_rows(lines[header_idx+1:], len(headers))
-                        else:
-                            if lines:
-                                headers = clean_headers(lines[0])
-                                rows = normalize_rows(lines[1:], len(headers))
-                            else:
-                                st.error("❌ No text extracted."); st.stop()
-                        st.success("✅ Image OCR Successful!")
                     else:
-                        st.error("❌ No text found."); st.stop()
+                        import pytesseract
+                        from PIL import Image
+                        image = Image.open(uploaded_file)
+                        text = pytesseract.image_to_string(image)
+                    
+                    df_result = parse_mba_odl_text(text)
+                    if not df_result.empty:
+                        st.success("✅ OCR/PDF Data Parsed Successfully!")
+                    else:
+                        st.error("❌ Could not extract data from PDF/Image. Please upload raw text or CSV.")
+                        st.stop()
                 except ImportError:
-                    st.error("❌ pytesseract missing."); st.stop()
+                    st.error("❌ Required libraries missing for PDF/Image parsing. Please upload raw .txt file.")
+                    st.stop()
             
             else:
                 st.error("❌ Unsupported format")
                 st.stop()
 
-            # ================== FIX 1: HIDE THE BLUE INDEX ==================
-            st.subheader("📋 Raw Data Preview")
-            if headers and rows:
-                df_display = pd.DataFrame(rows, columns=headers)
-                df_display.index = range(1, len(df_display) + 1)  # Serial 1 se start
-                # 🔥 MAGIC: Style hide index removes the blue number column!
-                st.dataframe(df_display.style.hide(axis='index'), use_container_width=True, height=400)
-
-            # ================== RUN ANALYSIS ==================
-            result = smart_parse_v63(headers, rows)
-            
-            if result and result.get("type") == "transcript":
-                st.info("📌 **Batch Level Stats (Average of all students):**")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📈 Average SPI", result['avg_spi'])
-                c2.metric("📊 Average CPI", result['avg_cpi'])
-                c3.metric("✅ Total Pass", result['pass'])
-                c4.metric("❌ Total Fail", result['fail'])
-                if result.get('toppers'):
-                    st.markdown(f"**🏆 Top 3 Toppers:** {', '.join(result['toppers'])}")
+            # ---- DISPLAY RESULTS (UGC + Tie-Breaker) ----
+            if not df_result.empty:
+                st.subheader("📊 Final Ranked Result (UGC Rule + Tie-Breaker)")
                 
-            elif result and result.get("type") == "result":
-                st.info("📌 **Batch Level Stats (All 96 students combined):**")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("📈 Batch CGPA", f"{result['cgpa']}/10 (Avg of all SGPAs)")
-                c2.metric("👨‍🎓 Total Students", result['total'])
-                c3.metric("📊 Average Grand Total", result['avg_total'])  # 🔥 Yeh batayega ki average marks 524.5 hai
-                if result.get('toppers'):
-                    st.markdown(f"**🏆 Top 3 Toppers:** {', '.join(result['toppers'])}")
+                # Metrics
+                total_students = len(df_result)
+                avg_sgpa = df_result['SGPA'].mean()
+                pass_count = df_result[df_result['Result'] == 'PASSED'].shape[0]
+                fail_count = total_students - pass_count
                 
-            elif result and result.get("type") == "semester":
-                c1, c2 = st.columns(2)
-                c1.metric("📈 CGPA", f"{result['cgpa']}/10 (Your overall)")
-                c2.metric("📚 Semesters", len(result['sgpa_data']))
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("👨‍🎓 Total Students", total_students)
+                col2.metric("📈 Batch Avg SGPA", f"{avg_sgpa:.2f}/10")
+                col3.metric("✅ Passed", pass_count)
+                col4.metric("❌ Failed", fail_count)
                 
-                st.subheader("📊 Semester-wise SGPA")
-                sgpa_data = result['sgpa_data']
-                df_table = pd.DataFrame({
-                    "Semester": [str(s[0]) for s in sgpa_data],
-                    "SGPA": [float(s[1]) for s in sgpa_data],
-                    "Subjects": [int(s[2]) for s in sgpa_data]
-                })
-                df_table.index = range(1, len(df_table) + 1)
-                st.table(df_table.style.hide(axis='index'))
+                st.markdown("---")
                 
-                try:
-                    chart_df = pd.DataFrame({
-                        "Semester": [str(s[0]) for s in sgpa_data],
-                        "SGPA": [float(s[1]) for s in sgpa_data]
-                    }).set_index("Semester")
-                    st.bar_chart(chart_df)
-                except Exception as chart_e:
-                    st.info(f"💡 Chart render issue: {chart_e}")
-                    
-            elif result and result.get("type") == "unknown":
-                st.warning(f"⚠️ {result.get('msg', 'Unknown format')}")
-                st.info("💡 Tip: Ensure columns like 'SPI/CPI', 'Semester/Marks', or 'Rank/Total/SGPA' exist.")
-            elif result and result.get("type") == "error":
-                st.error(f"🔥 Error: {result.get('msg')}")
+                # Top 3 Toppers
+                st.subheader("🏆 Top 3 Toppers")
+                top3 = df_result.head(3)
+                for idx, row in top3.iterrows():
+                    st.markdown(f"**Rank {row['Rank']}:** {row['Student Name']} | SGPA: {row['SGPA']} | Total: {row['Total']} | Grade: {row['Grade']}")
+                
+                st.markdown("---")
+                
+                # Full Data Table
+                st.subheader("📋 Complete Ranked List")
+                # FIX: Hide the ugly blue index
+                display_df = df_result.copy()
+                display_df.index = range(1, len(display_df) + 1)
+                st.dataframe(display_df.style.hide(axis='index'), use_container_width=True, height=500)
+                
+            else:
+                st.warning("⚠️ No data found. Please ensure the file contains valid MBA ODL result data.")
 
         except Exception as e:
             st.error(f"🔥 Engine Error: {e}")
+            st.info("💡 Try saving the raw text data in a `.txt` file and uploading it.")
 
 else:
-    st.info("👆 Upload your document or image!")
+    st.info("👆 Upload your MBA ODL Result data (TXT, CSV, PDF, or Image).")
 
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.3 | The Clarifier</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #64748b;'>Built with ❤️ by iPa v6.4 | UGC Rules + Tie-Breaker</p>", unsafe_allow_html=True)
